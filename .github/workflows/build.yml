@@ -18,21 +18,34 @@ jobs:
           - os: ubuntu-latest
             spec: Russgeist-linux.spec
             artifact: Russgeist-linux
-          - os: macos-13
+          # Both macOS builds run on the same (plentiful) Apple Silicon
+          # runner pool rather than the scarce real-Intel-hardware macos-13
+          # pool, which can queue for a long time. The x64 leg cross-builds
+          # under Rosetta 2 emulation instead - PyInstaller just bundles
+          # whatever architecture the running Python process reports, and
+          # an x64 Python under Rosetta reports x64.
+          - os: macos-14
             spec: Russgeist-macos.spec
             artifact: Russgeist-macos-intel
+            python_arch: x64
           - os: macos-14
             spec: Russgeist-macos.spec
             artifact: Russgeist-macos-arm64
+            python_arch: arm64
 
     runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Rosetta (for the x64 cross-build on Apple Silicon)
+        if: matrix.python_arch == 'x64'
+        run: softwareupdate --install-rosetta --agree-to-license
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          architecture: ${{ matrix.python_arch }}
 
       - name: Install system tray dependencies (Linux)
         if: runner.os == 'Linux'
