@@ -15,47 +15,58 @@ jobs:
           - os: windows-latest
             spec: Russgeist.spec
             artifact: Russgeist-windows
+            python_cmd: python
           - os: ubuntu-latest
             spec: Russgeist-linux.spec
             artifact: Russgeist-linux
+            python_cmd: python
           # Both macOS builds run on the same (plentiful) Apple Silicon
           # runner pool rather than the scarce real-Intel-hardware macos-13
           # pool, which can queue for a long time. The x64 leg cross-builds
-          # under Rosetta 2 emulation instead - PyInstaller just bundles
-          # whatever architecture the running Python process reports, and
-          # an x64 Python under Rosetta reports x64.
+          # under Rosetta 2 via a dedicated x86_64 Homebrew Python, invoked
+          # explicitly for every step - actions/setup-python's `architecture`
+          # input alone isn't enough, since PyInstaller's bootloader is a
+          # separately-compiled native binary bundled with its wheel, and
+          # pip resolving under Rosetta doesn't reliably fetch a genuine
+          # x86_64 wheel for it.
           - os: macos-14
             spec: Russgeist-macos.spec
             artifact: Russgeist-macos-intel
-            python_arch: x64
+            python_cmd: arch -x86_64 /usr/local/bin/python3.12
+            rosetta: true
           - os: macos-14
             spec: Russgeist-macos.spec
             artifact: Russgeist-macos-arm64
-            python_arch: arm64
+            python_cmd: python
 
     runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rosetta (for the x64 cross-build on Apple Silicon)
-        if: matrix.python_arch == 'x64'
-        run: softwareupdate --install-rosetta --agree-to-license
-
       - uses: actions/setup-python@v5
+        if: matrix.rosetta != true
         with:
           python-version: "3.12"
-          architecture: ${{ matrix.python_arch }}
+
+      - name: Install Rosetta + a real x86_64 Python (Intel macOS cross-build)
+        if: matrix.rosetta == true
+        run: |
+          softwareupdate --install-rosetta --agree-to-license
+          arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+          arch -x86_64 /usr/local/bin/brew install python@3.12
 
       - name: Install system tray dependencies (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y python3-tk libgirepository1.0-dev gir1.2-appindicator3-0.1
 
       - name: Install Python dependencies
-        run: pip install -r requirements.txt pyinstaller pyinstaller-hooks-contrib
+        shell: bash
+        run: ${{ matrix.python_cmd }} -m pip install -r requirements.txt pyinstaller pyinstaller-hooks-contrib
 
       - name: Build
-        run: pyinstaller ${{ matrix.spec }}
+        shell: bash
+        run: ${{ matrix.python_cmd }} -m PyInstaller ${{ matrix.spec }}
 
       - uses: actions/upload-artifact@v4
         with:
