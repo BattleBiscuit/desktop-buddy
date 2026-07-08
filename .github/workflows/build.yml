@@ -45,3 +45,4 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: dist/*
+          retention-days: 7
