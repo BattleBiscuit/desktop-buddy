@@ -18,9 +18,12 @@ jobs:
           - os: ubuntu-latest
             spec: Russgeist-linux.spec
             artifact: Russgeist-linux
-          - os: macos-latest
+          - os: macos-13
             spec: Russgeist-macos.spec
-            artifact: Russgeist-macos
+            artifact: Russgeist-macos-intel
+          - os: macos-14
+            spec: Russgeist-macos.spec
+            artifact: Russgeist-macos-arm64
 
     runs-on: ${{ matrix.os }}
 
@@ -63,7 +66,8 @@ jobs:
           mkdir -p release
           mv artifacts/Russgeist-windows/Russgeist.exe release/Russgeist-windows.exe
           mv artifacts/Russgeist-linux/Russgeist release/Russgeist-linux
-          mv artifacts/Russgeist-macos/Russgeist release/Russgeist-macos
+          mv artifacts/Russgeist-macos-intel/Russgeist release/Russgeist-macos-intel
+          mv artifacts/Russgeist-macos-arm64/Russgeist release/Russgeist-macos-arm64
 
       - uses: softprops/action-gh-release@v2
         with:
