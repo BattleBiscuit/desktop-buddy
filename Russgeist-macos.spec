@@ -33,7 +33,10 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    # UPX's self-decompressing stub is unsafe on macOS - it doesn't play well
+    # with Apple's executable-page/code-signing enforcement and is a known
+    # cause of exactly this kind of illegal-instruction crash at launch.
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
