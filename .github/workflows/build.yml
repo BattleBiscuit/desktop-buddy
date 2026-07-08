@@ -23,12 +23,12 @@ jobs:
           # Both macOS builds run on the same (plentiful) Apple Silicon
           # runner pool rather than the scarce real-Intel-hardware macos-13
           # pool, which can queue for a long time. The x64 leg cross-builds
-          # under Rosetta 2 via a dedicated x86_64 Homebrew Python, invoked
-          # explicitly for every step - actions/setup-python's `architecture`
-          # input alone isn't enough, since PyInstaller's bootloader is a
-          # separately-compiled native binary bundled with its wheel, and
-          # pip resolving under Rosetta doesn't reliably fetch a genuine
-          # x86_64 wheel for it.
+          # by running the x86_64 slice of the runner's pre-installed
+          # universal2 python.org framework build (via `arch -x86_64`)
+          # under Rosetta 2, instead of using actions/setup-python - its
+          # `architecture` input didn't reliably produce a genuine x86_64
+          # PyInstaller bootloader, since that's a separately-compiled
+          # native binary bundled with the pyinstaller wheel.
           - os: macos-14
             spec: Russgeist-macos.spec
             artifact: Russgeist-macos-intel
@@ -49,12 +49,9 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Rosetta + a real x86_64 Python (Intel macOS cross-build)
+      - name: Install Rosetta (for the x64 cross-build on Apple Silicon)
         if: matrix.rosetta == true
-        run: |
-          softwareupdate --install-rosetta --agree-to-license
-          arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-          arch -x86_64 /usr/local/bin/brew install python@3.12
+        run: softwareupdate --install-rosetta --agree-to-license
 
       - name: Install system tray dependencies (Linux)
         if: runner.os == 'Linux'
