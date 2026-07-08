@@ -1,12 +1,11 @@
 """
 Russgeist - a handful of small soot-sprite (Susuwatari-style) desktop
-companions that huddle and scurry along the Windows taskbar, roaming
+companions that huddle and scurry along the taskbar/dock/panel, roaming
 across every connected monitor.
 
-Windows-only. Run with: python main.py
+Runs on Windows, macOS, and Linux. Run with: python main.py
 """
 
-import ctypes
 import json
 import math
 import os
@@ -14,11 +13,6 @@ import random
 import sys
 import threading
 import time
-
-if sys.platform != "win32":
-    sys.exit("Russgeist only runs on Windows (needs user32.dll / shcore.dll via ctypes).")
-
-from ctypes import wintypes
 
 import tkinter as tk
 
@@ -30,128 +24,19 @@ except ImportError:
 try:
     import pystray
     HAVE_PYSTRAY = True
-except ImportError:
+except Exception:
+    # On Linux, pystray raises ValueError (not ImportError) at import time
+    # when no GTK/AppIndicator tray backend is installed on the system -
+    # a common case, since that's a native GTK dependency outside pip's
+    # reach. Either way, no tray icon is available; degrade the same as a
+    # missing pystray install (see the HAVE_PYSTRAY check in main()).
     HAVE_PYSTRAY = False
 
+import platform_backend
 
-# ---------------------------------------------------------------------------
-# DPI awareness - must be set before any window is created, or the sprite
-# will be upscaled/blurred by Windows' bitmap DPI virtualization.
-# ---------------------------------------------------------------------------
-def _set_dpi_awareness():
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
-    except (AttributeError, OSError):
-        try:
-            ctypes.windll.user32.SetProcessDPIAware()
-        except (AttributeError, OSError):
-            pass
-
-
-_set_dpi_awareness()
-
-
-# ---------------------------------------------------------------------------
-# Win32 constants and API bindings
-# ---------------------------------------------------------------------------
-user32 = ctypes.windll.user32
-
-GWL_EXSTYLE = -20
-WS_EX_LAYERED = 0x00080000
-WS_EX_TRANSPARENT = 0x00000020
-WS_EX_TOOLWINDOW = 0x00000080
-WS_EX_APPWINDOW = 0x00040000
-WS_EX_NOACTIVATE = 0x08000000
-
-HWND_TOPMOST = -1
-SWP_NOMOVE = 0x0002
-SWP_NOSIZE = 0x0001
-SWP_NOACTIVATE = 0x0010
-
-LWA_COLORKEY = 0x00000001
-
-SPI_GETWORKAREA = 0x0030
-
-SM_CXSCREEN = 0
-SM_CYSCREEN = 1
-
-WM_HOTKEY = 0x0312
-MOD_CONTROL = 0x0002
-MOD_SHIFT = 0x0004
-MOD_NOREPEAT = 0x4000
-VK_Q = 0x51
-HOTKEY_ID = 1
-
-try:
-    user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
-    user32.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
-    user32.SetWindowLongPtrW.restype = ctypes.c_ssize_t
-    user32.SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
-    _get_ex_style = user32.GetWindowLongPtrW
-    _set_ex_style = user32.SetWindowLongPtrW
-except AttributeError:
-    # 32-bit fallback for very old Windows/Python builds.
-    _get_ex_style = user32.GetWindowLongW
-    _set_ex_style = user32.SetWindowLongW
-
-user32.SystemParametersInfoW.argtypes = [ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p, ctypes.c_uint]
-user32.SetLayeredWindowAttributes.argtypes = [wintypes.HWND, wintypes.COLORREF, ctypes.c_ubyte, wintypes.DWORD]
-user32.RegisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_uint, ctypes.c_uint]
-user32.UnregisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int]
-user32.GetMessageW.argtypes = [ctypes.POINTER(wintypes.MSG), wintypes.HWND, ctypes.c_uint, ctypes.c_uint]
-
-
-class RECT(ctypes.Structure):
-    _fields_ = [
-        ("left", ctypes.c_long),
-        ("top", ctypes.c_long),
-        ("right", ctypes.c_long),
-        ("bottom", ctypes.c_long),
-    ]
-
-
-def get_work_area():
-    """Primary monitor's usable desktop area (taskbar excluded). Used as a fallback
-    if per-monitor enumeration below is unavailable."""
-    rect = RECT()
-    if user32.SystemParametersInfoW(SPI_GETWORKAREA, 0, ctypes.byref(rect), 0):
-        return rect.left, rect.top, rect.right, rect.bottom
-    w = user32.GetSystemMetrics(SM_CXSCREEN)
-    h = user32.GetSystemMetrics(SM_CYSCREEN)
-    return 0, 0, w, h
-
-
-class MONITORINFO(ctypes.Structure):
-    _fields_ = [
-        ("cbSize", wintypes.DWORD),
-        ("rcMonitor", RECT),
-        ("rcWork", RECT),
-        ("dwFlags", wintypes.DWORD),
-    ]
-
-
-_MonitorEnumProc = ctypes.WINFUNCTYPE(
-    wintypes.BOOL, wintypes.HMONITOR, wintypes.HDC, ctypes.POINTER(RECT), wintypes.LPARAM
-)
-user32.EnumDisplayMonitors.argtypes = [wintypes.HDC, ctypes.POINTER(RECT), _MonitorEnumProc, wintypes.LPARAM]
-user32.GetMonitorInfoW.argtypes = [wintypes.HMONITOR, ctypes.POINTER(MONITORINFO)]
-
-
-def get_all_monitors():
-    """Work area (taskbar excluded) of every connected monitor, sorted left to right."""
-    monitors = []
-
-    def _callback(hmonitor, hdc, lprect, lparam):
-        info = MONITORINFO()
-        info.cbSize = ctypes.sizeof(MONITORINFO)
-        if user32.GetMonitorInfoW(hmonitor, ctypes.byref(info)):
-            monitors.append({"work": (info.rcWork.left, info.rcWork.top, info.rcWork.right, info.rcWork.bottom)})
-        return 1  # continue enumeration
-
-    if not user32.EnumDisplayMonitors(None, None, _MonitorEnumProc(_callback), 0) or not monitors:
-        monitors = [{"work": get_work_area()}]
-    monitors.sort(key=lambda m: m["work"][0])
-    return monitors
+# Must happen before any window is created, or on Windows the sprite will be
+# upscaled/blurred by DPI virtualization; a no-op on macOS/Linux.
+platform_backend.set_dpi_awareness()
 
 
 def monitor_for_x(x_center, monitors):
@@ -186,32 +71,6 @@ def monitor_for_point(x, y, monitors):
     return min(monitors, key=_distance)
 
 
-def apply_window_styles(hwnd, transparent_key_rgb):
-    """Layered (for color-key transparency) + hidden from taskbar/Alt-Tab +
-    always-on-top. Deliberately NOT click-through (WS_EX_TRANSPARENT): the
-    sprites need to receive mouse clicks so they can be dragged.
-
-    Rewriting GWL_EXSTYLE via SetWindowLongPtrW resets the layered window's
-    color-key, which Windows then paints as solid black instead of
-    transparent. Re-asserting SetLayeredWindowAttributes afterwards (on top
-    of Tk's own "-transparentcolor" call) keeps the color-key intact.
-    """
-    ex_style = _get_ex_style(hwnd, GWL_EXSTYLE)
-    ex_style |= WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
-    ex_style &= ~WS_EX_APPWINDOW
-    _set_ex_style(hwnd, GWL_EXSTYLE, ex_style)
-
-    r, g, b = transparent_key_rgb
-    colorref = r | (g << 8) | (b << 16)
-    user32.SetLayeredWindowAttributes(hwnd, colorref, 0, LWA_COLORKEY)
-
-    user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
-
-
-def reassert_topmost(hwnd):
-    user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
-
-
 # ---------------------------------------------------------------------------
 # Soot sprite art - a single procedurally-drawn pose per instance. Motion is
 # conveyed by rotating this one drawing (a waddle while walking, an
@@ -223,15 +82,12 @@ ASSET_DIR = os.path.dirname(os.path.abspath(__file__))
 
 def _get_data_dir():
     """Where per-user data (settings, and the generated sprite asset) lives.
-    Next to the script when run from source; a per-user AppData folder when
+    Next to the script when run from source; a per-user app-data folder when
     packaged as a frozen exe (e.g. via PyInstaller --onefile), since a
     onefile build's own directory is a temp extraction folder that gets
     wiped on exit - writing there would silently reset settings every run."""
     if getattr(sys, "frozen", False):
-        base = os.environ.get("APPDATA") or os.path.expanduser("~")
-        data_dir = os.path.join(base, "Russgeist")
-        os.makedirs(data_dir, exist_ok=True)
-        return data_dir
+        return platform_backend.get_data_dir("Russgeist")
     return ASSET_DIR
 
 
@@ -386,9 +242,20 @@ def _composite_on_key(rgba_image):
 
 def _rotated_frame(base_rgba, angle_deg):
     """Rotate with NEAREST resampling (keeps alpha binary, avoiding a
-    colored fringe where the color-key trick can't blend a soft edge)."""
+    colored fringe where the color-key trick can't blend a soft edge).
+
+    Windows/Linux need the sprite flattened onto an opaque color-key
+    background (their transparency tricks - LWA_COLORKEY, the X Shape
+    extension - both need one); macOS instead uses Tk-Aqua's real per-pixel
+    alpha, so the raw RGBA goes straight to Tk there. Either way, the
+    resulting PhotoImage also carries its shape mask (Linux only, else
+    None) so _set_image can hand it to the window backend without every
+    caller needing to know that detail."""
     rotated = base_rgba.rotate(angle_deg, resample=Image.NEAREST, expand=False, fillcolor=(0, 0, 0, 0))
-    return ImageTk.PhotoImage(_composite_on_key(rotated))
+    display_image = _composite_on_key(rotated) if platform_backend.NEEDS_COLOR_KEY_FLATTEN else rotated
+    photo = ImageTk.PhotoImage(display_image)
+    photo.shape_mask = platform_backend.build_shape_mask(rotated)
+    return photo
 
 
 def _add_outline(rgba_image, color):
@@ -543,13 +410,12 @@ class SootSprite:
 
         self.win.overrideredirect(True)
         self.win.attributes("-topmost", True)
-        self.win.attributes("-transparentcolor", TRANSPARENT_KEY)
-        self.win.configure(bg=TRANSPARENT_KEY)
+        self.win.title(f"Russgeist-{id(self)}")  # unique - lets the macOS backend find its NSWindow
         self.win.geometry(f"{self.w}x{self.h}+{int(self.x)}+{int(self.y)}")
 
-        self.label = tk.Label(self.win, bd=0, highlightthickness=0, bg=TRANSPARENT_KEY)
+        self.label = tk.Label(self.win, bd=0, highlightthickness=0)
+        platform_backend.configure_transparent_window(self.win, self.label, TRANSPARENT_KEY)
         self.label.place(x=0, y=0, width=self.w, height=self.h)
-        self._set_image(self.idle_frame)
 
         self.label.bind("<ButtonPress-1>", self._on_press)
         self.label.bind("<B1-Motion>", self._on_drag)
@@ -557,8 +423,8 @@ class SootSprite:
         self.label.bind("<Button-3>", self._on_right_click)
 
         self.win.update_idletasks()
-        self.hwnd = self.win.winfo_id()
-        apply_window_styles(self.hwnd, ImageColor.getrgb(TRANSPARENT_KEY))
+        self.window_backend = platform_backend.SpriteWindowBackend(self.win, TRANSPARENT_KEY)
+        self._set_image(self.idle_frame)
 
         self._schedule_next_state()
         self._schedule_next_shake()
@@ -577,6 +443,7 @@ class SootSprite:
     def _set_image(self, img):
         self.label.configure(image=img)
         self.label.image = img
+        self.window_backend.on_frame_changed(img.shape_mask)
 
     # -- state timing -------------------------------------------------------
 
@@ -1043,10 +910,10 @@ class SootSprite:
     def _on_reassert_timer(self):
         if self.closed:
             return
-        reassert_topmost(self.hwnd)
+        self.window_backend.reassert_topmost()
         # re-check in case a monitor was added/removed, resolution changed, or the
         # taskbar auto-hid, then clamp position back inside the (possibly new) bounds
-        self.monitors = get_all_monitors()
+        self.monitors = platform_backend.get_all_monitors()
         if not self.dragging and self.state not in (self.RETURNING, self.THROWN, self.JUMPING):
             lo, hi = self._edge_range()
             if self.edge in ("bottom", "top"):
@@ -1083,30 +950,14 @@ def build_tray_icon(
     return pystray.Icon("Russgeist", bg, "Russgeist", menu)
 
 
-def hotkey_listener(on_exit):
-    if not user32.RegisterHotKey(None, HOTKEY_ID, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, VK_Q):
-        print("[Russgeist] Could not register Ctrl+Shift+Q (already in use by another app).")
-        return
-    msg = wintypes.MSG()
-    try:
-        while True:
-            ret = user32.GetMessageW(ctypes.byref(msg), None, 0, 0)
-            if ret in (0, -1):
-                break
-            if msg.message == WM_HOTKEY and msg.wParam == HOTKEY_ID:
-                on_exit()
-                break
-    finally:
-        user32.UnregisterHotKey(None, HOTKEY_ID)
-
-
 def main():
     ensure_asset()
 
     root = tk.Tk()
     root.withdraw()  # the root itself hosts no sprite; each one gets its own Toplevel
+    platform_backend.hide_from_taskbar_dock()
 
-    monitors = get_all_monitors()
+    monitors = platform_backend.get_all_monitors()
     sprites = []
     persisted = load_settings()
     paused_state = {"paused": persisted["paused"]}
@@ -1139,6 +990,7 @@ def main():
         spawn_sprite()
 
     tray_icon_holder = {}
+    hotkey_holder = {}
 
     def shutdown():
         icon = tray_icon_holder.get("icon")
@@ -1147,6 +999,7 @@ def main():
                 icon.stop()
             except Exception:
                 pass
+        platform_backend.unregister_quit_hotkey(hotkey_holder.get("handle"))
         try:
             root.destroy()
         except Exception:
@@ -1203,7 +1056,7 @@ def main():
         print("[Russgeist] pystray not installed - tray exit/pause/spawn disabled. "
               "Install with 'pip install pystray', or use Ctrl+Shift+Q to quit.")
 
-    threading.Thread(target=hotkey_listener, args=(request_exit,), daemon=True).start()
+    hotkey_holder["handle"] = platform_backend.register_quit_hotkey(request_exit)
 
     root.mainloop()
 

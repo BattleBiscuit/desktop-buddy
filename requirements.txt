@@ -1,2 +1,6 @@
 Pillow>=10.0.0
 pystray>=0.19.5
+pynput>=1.7.6; sys_platform != "darwin"
+pyobjc-framework-Cocoa>=10.0; sys_platform == "darwin"
+python-xlib>=0.33; sys_platform == "linux"
+ewmh>=0.1.6; sys_platform == "linux"

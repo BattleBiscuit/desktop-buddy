@@ -1,0 +1,47 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            spec: Russgeist.spec
+            artifact: Russgeist-windows
+          - os: ubuntu-latest
+            spec: Russgeist-linux.spec
+            artifact: Russgeist-linux
+          - os: macos-latest
+            spec: Russgeist-macos.spec
+            artifact: Russgeist-macos
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install system tray dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y python3-tk libgirepository1.0-dev gir1.2-appindicator3-0.1
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt pyinstaller pyinstaller-hooks-contrib
+
+      - name: Build
+        run: pyinstaller ${{ matrix.spec }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/*
