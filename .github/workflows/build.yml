@@ -19,20 +19,19 @@ jobs:
             spec: Russgeist-linux.spec
             artifact: Russgeist-linux
             python_cmd: python
-          # Both macOS builds run on the same (plentiful) Apple Silicon
-          # runner pool rather than the scarce real-Intel-hardware macos-13
-          # pool, which can queue for a long time. The x64 leg cross-builds
-          # by running the x86_64 slice of the runner's pre-installed
-          # universal2 python.org framework build (via `arch -x86_64`)
-          # under Rosetta 2, instead of using actions/setup-python - its
-          # `architecture` input didn't reliably produce a genuine x86_64
-          # PyInstaller bootloader, since that's a separately-compiled
-          # native binary bundled with the pyinstaller wheel.
-          - os: macos-14
+          # Real Intel hardware for the x64 build, not a Rosetta-emulated
+          # cross-build on Apple Silicon: the emulated approach produced a
+          # binary that crashed with "Illegal Instruction: 4" on real
+          # hardware across multiple fix attempts (UPX, deployment target),
+          # consistent with a CPU instruction-set mismatch baked in during
+          # the emulated build that real native hardware doesn't have.
+          # macos-13 queues longer (GitHub's scarcest, non-renewable runner
+          # pool - Apple no longer makes Intel Macs), but is unambiguously
+          # correct.
+          - os: macos-13
             spec: Russgeist-macos.spec
             artifact: Russgeist-macos-intel
-            python_cmd: arch -x86_64 /usr/local/bin/python3.12
-            rosetta: true
+            python_cmd: python
           - os: macos-14
             spec: Russgeist-macos.spec
             artifact: Russgeist-macos-arm64
@@ -40,12 +39,9 @@ jobs:
 
     runs-on: ${{ matrix.os }}
 
-    # Only affects macOS: if pip can't find a prebuilt wheel matching our
-    # unusual interpreter (the system framework Python's x86_64 slice under
-    # Rosetta) and falls back to compiling PyInstaller's bootloader from
-    # source, this pins the minimum supported macOS version instead of
-    # defaulting to the runner's own (much newer) SDK baseline - avoids
-    # baking in compiler assumptions that don't hold on an older real Mac.
+    # Only affects macOS: pins the minimum supported macOS version rather
+    # than defaulting to the runner's own SDK baseline, in case anything
+    # ends up compiled locally instead of installed from a prebuilt wheel.
     env:
       MACOSX_DEPLOYMENT_TARGET: "10.13"
 
@@ -53,13 +49,8 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
-        if: matrix.rosetta != true
         with:
           python-version: "3.12"
-
-      - name: Install Rosetta (for the x64 cross-build on Apple Silicon)
-        if: matrix.rosetta == true
-        run: softwareupdate --install-rosetta --agree-to-license
 
       - name: Install system tray dependencies (Linux)
         if: runner.os == 'Linux'
