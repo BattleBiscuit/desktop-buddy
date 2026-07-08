@@ -40,6 +40,15 @@ jobs:
 
     runs-on: ${{ matrix.os }}
 
+    # Only affects macOS: if pip can't find a prebuilt wheel matching our
+    # unusual interpreter (the system framework Python's x86_64 slice under
+    # Rosetta) and falls back to compiling PyInstaller's bootloader from
+    # source, this pins the minimum supported macOS version instead of
+    # defaulting to the runner's own (much newer) SDK baseline - avoids
+    # baking in compiler assumptions that don't hold on an older real Mac.
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "10.13"
+
     steps:
       - uses: actions/checkout@v4
 
