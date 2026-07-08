@@ -78,6 +78,8 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -87,8 +89,16 @@ jobs:
           mkdir -p release
           mv artifacts/Russgeist-windows/Russgeist.exe release/Russgeist-windows.exe
           mv artifacts/Russgeist-linux/Russgeist release/Russgeist-linux
-          mv artifacts/Russgeist-macos-intel/Russgeist release/Russgeist-macos-intel
-          mv artifacts/Russgeist-macos-arm64/Russgeist release/Russgeist-macos-arm64
+
+          # macOS binaries ship zipped with run-macos.command, which strips
+          # the Gatekeeper quarantine flag (unsigned builds get blocked
+          # otherwise) and launches the app - double-click it after unzipping.
+          for variant in intel arm64; do
+            dir="artifacts/Russgeist-macos-$variant"
+            cp run-macos.command "$dir/"
+            chmod +x "$dir/Russgeist" "$dir/run-macos.command"
+            (cd "$dir" && zip -j "$OLDPWD/release/Russgeist-macos-$variant.zip" Russgeist run-macos.command)
+          done
 
       - uses: softprops/action-gh-release@v2
         with:
