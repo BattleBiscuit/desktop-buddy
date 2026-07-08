@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('sootsprite.png', '.')],
     hiddenimports=[
         'Xlib.ext.shape',
         'Xlib.ext.randr',

@@ -10,6 +10,7 @@ import json
 import math
 import os
 import random
+import shutil
 import sys
 import threading
 import time
@@ -77,7 +78,11 @@ def monitor_for_point(x, y, monitors):
 # occasional shake while idle) rather than switching between different
 # drawn poses.
 # ---------------------------------------------------------------------------
-ASSET_DIR = os.path.dirname(os.path.abspath(__file__))
+# sys._MEIPASS is PyInstaller's temp extraction dir for bundled `datas`
+# files (e.g. the real hand-drawn sootsprite.png) - distinct from DATA_DIR
+# below, which is where a frozen build persists settings/the asset copy
+# across runs, since _MEIPASS itself gets wiped on exit.
+ASSET_DIR = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.abspath(__file__))
 
 
 def _get_data_dir():
@@ -184,7 +189,12 @@ def make_wink_variant(base_rgba, wink):
 
 def ensure_asset():
     path = os.path.join(DATA_DIR, SPRITE_FILE)
-    if not os.path.isfile(path):
+    if os.path.isfile(path):
+        return
+    bundled_path = os.path.join(ASSET_DIR, SPRITE_FILE)
+    if os.path.isfile(bundled_path) and bundled_path != path:
+        shutil.copyfile(bundled_path, path)
+    else:
         print(f"[Russgeist] '{SPRITE_FILE}' not found, generating a placeholder sprite.")
         draw_soot_sprite(160).save(path)
 
