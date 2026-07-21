@@ -920,19 +920,30 @@ class SootSprite:
     def _on_reassert_timer(self):
         if self.closed:
             return
-        self.window_backend.reassert_topmost()
-        # re-check in case a monitor was added/removed, resolution changed, or the
-        # taskbar auto-hid, then clamp position back inside the (possibly new) bounds
-        self.monitors = platform_backend.get_all_monitors()
-        if not self.dragging and self.state not in (self.RETURNING, self.THROWN, self.JUMPING):
-            lo, hi = self._edge_range()
-            if self.edge in ("bottom", "top"):
-                self.x = min(max(self.x, lo), hi)
-            else:
-                self.y = min(max(self.y, lo), hi)
-            self._snap_fixed_coord()
-            self.win.geometry(f"+{int(self.x)}+{int(self.y)}")
-        self.win.after(self.REASSERT_MS, self._on_reassert_timer)
+        # A one-off failure here (e.g. a transient SetWindowPos/monitor-
+        # enumeration hiccup around sleep/resume or a monitor being
+        # unplugged) must never cancel the recurring reassert - without the
+        # try/finally, an exception raised before the self.win.after() call
+        # below would silently kill this sprite's topmost enforcement
+        # forever, since Tk swallows callback exceptions instead of
+        # propagating them.
+        try:
+            self.window_backend.reassert_topmost()
+            # re-check in case a monitor was added/removed, resolution changed, or the
+            # taskbar auto-hid, then clamp position back inside the (possibly new) bounds
+            self.monitors = platform_backend.get_all_monitors()
+            if not self.dragging and self.state not in (self.RETURNING, self.THROWN, self.JUMPING):
+                lo, hi = self._edge_range()
+                if self.edge in ("bottom", "top"):
+                    self.x = min(max(self.x, lo), hi)
+                else:
+                    self.y = min(max(self.y, lo), hi)
+                self._snap_fixed_coord()
+                self.win.geometry(f"+{int(self.x)}+{int(self.y)}")
+        except Exception as exc:
+            print(f"[Russgeist] Reassert-topmost tick failed (will retry): {exc}")
+        finally:
+            self.win.after(self.REASSERT_MS, self._on_reassert_timer)
 
 
 # ---------------------------------------------------------------------------
